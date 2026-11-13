@@ -415,7 +415,9 @@ def build_pool(conn: sqlite3.Connection, use_yelp: bool, now: datetime | None = 
     """
     directory = load_directory(conn)
     if not use_yelp:
-        pool = directory.rename(columns={"nyc_id": "restaurant_id", "cuisine": "categories"})
+        from restaurant_alts.name_matching import collapse_duplicates
+        mapped = set(load_mappings(conn)["nyc_id"])
+        pool = collapse_duplicates(directory, mapped).rename(columns={"nyc_id": "restaurant_id", "cuisine": "categories"})
         for col in ("yelp_id", "rating", "review_count", "price_level", "data_fetched_at"):
             pool[col] = None
         pool["name_source"] = "nyc"
@@ -437,18 +439,63 @@ def build_pool(conn: sqlite3.Connection, use_yelp: bool, now: datetime | None = 
 
 # ---------------------------------------------------------------- seed files (deployment)
 
-def import_seed(conn: sqlite3.Connection, folder: str | Path = "seed") -> dict[str, int]:
-    """Load permanent tables from <folder>/<table>.csv when the directory is empty.
+def _meta(conn: sqlite3.Connection, key: str, value: str | None = None) -> str | None:
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    if value is not None:
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+        return value
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
 
-    Streamlit Cloud has no reliable disk, so a fresh deploy starts from these files.
-    Seed files hold NYC data and Yelp business IDs only, never Yelp content.
-    """
+
+def seed_signature(folder: str | Path = "seed") -> str | None:
+    """Hash of the seed CSVs, or None when there is no seed."""
+    import hashlib
     folder = Path(folder)
-    if not load_directory(conn).empty or not (folder / "directory.csv").exists():
+    if not (folder / "directory.csv").exists():
+        return None
+    digest = hashlib.sha256()
+    for table in PERMANENT_TABLES:
+        path = folder / f"{table}.csv"
+        if path.exists():
+            digest.update(table.encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
+def mark_seed_synced(conn: sqlite3.Connection, folder: str | Path = "seed") -> None:
+    """Record that this database already matches the seed (used after export-seed)."""
+    sig = seed_signature(folder)
+    if sig:
+        _meta(conn, "seed_signature", sig)
+
+
+def lock_seed(conn: sqlite3.Connection) -> None:
+    """Never replace this database from seed/ (e.g. the synthetic demo database)."""
+    _meta(conn, "seed_lock", "1")
+
+
+def import_seed(conn: sqlite3.Connection, folder: str | Path = "seed") -> dict[str, int]:
+    """Make the permanent tables match <folder>/*.csv whenever the seed files change.
+
+    Streamlit Cloud has no reliable disk and keeps old files across redeploys, so the app
+    calls this on start. When the seed differs from what this database was loaded from,
+    the permanent tables are replaced and the Yelp cache is cleared (it may hold
+    restaurants from an old sample; it is rebuilt on the next click). Seed files hold NYC
+    data and Yelp business IDs only, never Yelp content.
+    """
+    sig = seed_signature(folder)
+    if sig is None or _meta(conn, "seed_lock") or _meta(conn, "seed_signature") == sig:
         return {}
+    folder = Path(folder)
+    with conn:
+        for table in ("aliases", "mappings", "yelp_sample", "directory"):  # FK-safe order
+            conn.execute(f"DELETE FROM {table}")
+        conn.execute("DELETE FROM yelp_cache")
     loaded = {}
     for table in PERMANENT_TABLES:  # directory first (foreign keys)
         path = folder / f"{table}.csv"
         if path.exists():
             loaded[table] = import_table_csv(conn, table, path)
+    _meta(conn, "seed_signature", sig)
     return loaded

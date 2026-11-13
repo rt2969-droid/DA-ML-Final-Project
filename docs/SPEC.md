@@ -52,6 +52,12 @@ by floating-point error.
 
 ## Resolved
 
+- Sample enlarged to 50 per area (500 restaurants; 14 calls to build, about 15–30 per
+  refresh) so strict filters still leave candidates (2026-11-13).
+- Duplicate NYC records of one restaurant (same normalized name, address and ZIP; 358 in the
+  NYC file) are shown once; the record matched to Yelp, else one with a cuisine, is kept.
+- The deployed app reloads its permanent tables from `seed/` whenever the seed changes.
+
 - Seed files are committed (2026-11-13): NYC directory, 200 Yelp sample IDs from a new
   `build-sample` run, 125 name+address mappings. IDs only, no Yelp content.
 - First commit (project skeleton) went directly to `main`; every later phase is a PR.

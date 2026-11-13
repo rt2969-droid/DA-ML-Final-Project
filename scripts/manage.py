@@ -35,8 +35,9 @@ def main(argv: list[str] | None = None) -> int:
         for table in ds.PERMANENT_TABLES:
             n = ds.export_table_csv(conn, table, Path(args.seed) / f"{table}.csv")
             print(f"{table}: {n} rows")
+        ds.mark_seed_synced(conn, args.seed)  # this DB already matches the new seed
     else:
-        print(ds.import_seed(conn, args.seed) or "Nothing imported (database not empty or no seed).")
+        print(ds.import_seed(conn, args.seed) or "Nothing imported (already up to date, locked, or no seed).")
     return 0
 
 

@@ -320,7 +320,7 @@ def test_build_pool_yelp_and_local(conn, tmp_path):
     assert row["name"] == "Fake a1"                            # NYC name kept
     assert (row["categories"], row["price_level"], row["lat"]) == ("Italian, Pizza", 2, 40.71)
     local = ds.build_pool(conn, use_yelp=False, now=NOW)
-    assert len(local) == 3 and local["rating"].isna().all()
+    assert len(local) == 2 and local["rating"].isna().all()  # the two "Twin" records collapse
     assert local.set_index("restaurant_id").loc["2", "categories"] == "Thai"
 
 
@@ -377,3 +377,12 @@ def test_reference_yelp_twin_is_never_returned():
     ref = pool.iloc[0].to_dict()
     result = recommend(ref, pool, Filters(min_rating=None, min_reviews=None, review_ratio=None))
     assert sorted(r["restaurant_id"] for r in result.recommendations) == ["yelp:y3", "yelp:y4"]
+
+
+def test_yelp_error_code_is_reported_and_bad_token_is_auth_error():
+    bad = client(lambda p, q: FakeResponse(400, {"error": {"code": "TOKEN_INVALID", "description": "x"}}))
+    with pytest.raises(yc.AuthError, match="TOKEN_INVALID"):
+        bad.search("Chelsea")
+    other = client(lambda p, q: FakeResponse(400, {"error": {"code": "VALIDATION_ERROR"}}))
+    with pytest.raises(yc.RequestFailed, match="HTTP 400, VALIDATION_ERROR"):
+        other.search("Chelsea")

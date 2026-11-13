@@ -10,7 +10,7 @@ data is never used. Nothing here runs on a schedule.
 Command line (explicit admin actions):
     python -m restaurant_alts.refresh purge
     python -m restaurant_alts.refresh refresh
-    python -m restaurant_alts.refresh build-sample   # creates the fixed sample once
+    python -m restaurant_alts.refresh build-sample [--replace]   # creates the fixed sample
 """
 
 from __future__ import annotations
@@ -248,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("action", choices=["purge", "refresh", "build-sample"])
     parser.add_argument("--db", default="data/restaurants.sqlite")
-    parser.add_argument("--per-area", type=int, default=20)
+    parser.add_argument("--per-area", type=int, default=50)
+    parser.add_argument("--replace", action="store_true",
+                        help="build-sample only: delete the existing sample and cache first")
     args = parser.parse_args(argv)
 
     conn = ds.connect(args.db)
@@ -260,8 +262,14 @@ def main(argv: list[str] | None = None) -> int:
         report = refresh_sample(conn, client)
     else:
         if not ds.load_sample(conn).empty:
-            print("A sample already exists; refusing to resample. Delete it explicitly first.")
-            return 1
+            if not args.replace:
+                print("A sample already exists; refusing to resample. "
+                      "Pass --replace to delete it and build a new one.")
+                return 1
+            with conn:
+                conn.execute("DELETE FROM yelp_sample")
+            ds.clear_cache(conn)
+            print("Deleted the old sample and the Yelp cache.")
         zips = set(ds.load_directory(conn)["zip"].dropna()) or None
         report = build_sample(conn, client, per_area=args.per_area, allowed_zips=zips)
     print(f"Calls: {report.calls}. Cached: {len(report.refreshed)}. "

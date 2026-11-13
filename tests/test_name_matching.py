@@ -124,3 +124,21 @@ def test_missing_address_is_none_not_error(directory):
 def test_empty_directory(directory):
     r = match_restaurant("Don Angie", directory.iloc[0:0])
     assert r.status == NO_MATCH
+
+
+def test_duplicate_records_of_one_restaurant_show_once():
+    d = pd.DataFrame([
+        ("50104682", "SAMPLE THAI", "204 EAST   13 STREET", "10003", "Thai"),
+        ("50156251", "Sample Thai", "204 East 13th St", "10003", None),     # re-permit duplicate
+        ("70000001", "Sample Thai", "9 Other Ave", "10010", "Thai"),       # real second branch
+    ], columns=["nyc_id", "name", "address", "zip", "cuisine"])
+    r = match_restaurant("sample thai", d)
+    assert sorted(c.nyc_id for c in r.candidates) == ["50104682", "70000001"]
+    assert r.requires_choice  # two real branches still need a choice
+
+    only_dupes = d.iloc[:2]
+    r = match_restaurant("sample thai", only_dupes)
+    assert r.selected_id == "50104682"  # one restaurant: pre-selected for confirmation
+    # A record matched to Yelp wins even without a cuisine.
+    r = match_restaurant("sample thai", only_dupes, preferred_ids={"50156251"})
+    assert r.selected_id == "50156251"

@@ -51,6 +51,21 @@ class RequestFailed(YelpUnavailable):
     reason = "The Yelp request failed (network or server error)."
 
 
+# Yelp error codes that mean the key is the problem (sometimes sent with HTTP 400).
+AUTH_CODES = {"TOKEN_INVALID", "TOKEN_MISSING", "UNAUTHORIZED_ACCESS_TOKEN", "INVALID_AUTHORIZATION_METHOD"}
+
+
+def _error_code(response) -> str | None:
+    """Yelp's short error code (e.g. 'TOKEN_INVALID'), never the request or key."""
+    if response.ok:
+        return None
+    try:
+        code = (response.json().get("error") or {}).get("code")
+    except Exception:
+        return None
+    return str(code)[:40] if code else None
+
+
 # ---------------------------------------------------------------- call counting
 
 class CallCounter:
@@ -154,12 +169,14 @@ class YelpClient:
             )
         except requests.RequestException as error:
             raise RequestFailed(f"{RequestFailed.reason} ({type(error).__name__})") from error
-        if response.status_code in (401, 403):
-            raise AuthError(AuthError.reason)
+        code = _error_code(response)
+        if response.status_code in (401, 403) or code in AUTH_CODES:
+            raise AuthError(f"{AuthError.reason} (HTTP {response.status_code}{', ' + code if code else ''})")
         if response.status_code == 429:
             raise RateLimited(RateLimited.reason)
         if not response.ok:
-            raise RequestFailed(f"{RequestFailed.reason} (HTTP {response.status_code})")
+            detail = f"HTTP {response.status_code}" + (f", {code}" if code else "")
+            raise RequestFailed(f"{RequestFailed.reason} ({detail})")
         try:
             return response.json()
         except ValueError as error:

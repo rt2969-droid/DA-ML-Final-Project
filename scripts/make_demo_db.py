@@ -34,6 +34,7 @@ def main(path: str = "data/demo.sqlite", n: int = 60, seed: int = 7) -> None:
     rng = random.Random(seed)
     Path(path).unlink(missing_ok=True)
     conn = ds.connect(path)
+    ds.lock_seed(conn)  # keep the demo data; never replace it from seed/
     now = ds.utc_now()
     rows, cache = [], []
     names = set()
