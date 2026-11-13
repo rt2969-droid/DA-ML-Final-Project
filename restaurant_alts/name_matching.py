@@ -81,6 +81,29 @@ class MatchResult:
         return self.selected_id is None and bool(self.candidates)
 
 
+# ---------------------------------------------------------------- duplicates
+
+def collapse_duplicates(directory: pd.DataFrame, preferred_ids=None) -> pd.DataFrame:
+    """One row per (normalized name, normalized address, ZIP).
+
+    The NYC file can hold several records for one restaurant (e.g. a re-permit). Keeps,
+    in order: a record in ``preferred_ids`` (e.g. matched to Yelp), one with a cuisine,
+    the lowest nyc_id. Different addresses (real branches) are never merged.
+    """
+    if directory.empty:
+        return directory
+    preferred = set(preferred_ids or ())
+    d = directory.assign(
+        _k=directory["name"].map(normalize_name) + "|" + directory["address"].map(normalize_address)
+           + "|" + directory["zip"].fillna("").astype(str),
+        _pref=~directory["nyc_id"].isin(preferred),
+        _nocuisine=directory["cuisine"].isna() if "cuisine" in directory.columns else False,
+    )
+    d = d.sort_values(["_pref", "_nocuisine", "nyc_id"], kind="mergesort")
+    d = d.drop_duplicates("_k", keep="first").sort_index()
+    return d.drop(columns=["_k", "_pref", "_nocuisine"])
+
+
 # ---------------------------------------------------------------- matching
 
 def match_restaurant(
@@ -89,11 +112,17 @@ def match_restaurant(
     aliases: pd.DataFrame | None = None,
     limit: int = FUZZY_LIMIT,
     cutoff: float = FUZZY_CUTOFF,
+    preferred_ids=None,
 ) -> MatchResult:
-    """Find the restaurant a user typed. ``directory`` needs nyc_id, name, address, zip."""
+    """Find the restaurant a user typed. ``directory`` needs nyc_id, name, address, zip.
+
+    Duplicate records of the same restaurant (same name, address and ZIP) are shown once;
+    ``preferred_ids`` picks which record represents them.
+    """
     key = normalize_name(query)
     if not key:
         return MatchResult(query, NO_MATCH, message="Enter a restaurant name to search.")
+    directory = collapse_duplicates(directory, preferred_ids)
 
     names = directory["name"].map(normalize_name)
 

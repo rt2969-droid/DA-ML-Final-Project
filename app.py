@@ -89,7 +89,8 @@ query = st.text_input("Restaurant name", placeholder="e.g. Joe's Pizza")
 reference_id = None
 
 if query.strip():
-    match = match_restaurant(query, directory, aliases)
+    match = match_restaurant(query, directory, aliases,
+                             preferred_ids=set(ds.load_mappings(conn)["nyc_id"]))
     if not match.candidates:
         st.info(match.message)
     else:
@@ -165,13 +166,18 @@ if st.button("Find alternatives", type="primary"):
     with st.spinner("Checking data and ranking restaurants…"):
         report = rf.ensure_fresh(conn, client)
         notes = []
-        if report.attempted and report.not_refreshed:
-            notes.append(f"{len(report.not_refreshed)} sampled restaurants were not refreshed "
-                         "by Yelp and are left out.")
         pool = ds.build_pool(conn, use_yelp=True)
-        use_yelp = report.yelp_available and not pool.empty
+        use_yelp = not pool.empty  # Yelp data under 24 hours old is valid even if a refresh failed
+        if not report.yelp_available and use_yelp:
+            notes.append(f"Yelp stopped during the refresh ({report.reason}). Using Yelp data "
+                         f"from the last 24 hours; {len(report.not_refreshed)} restaurants "
+                         "without fresh data are left out.")
+        elif not report.yelp_available:
+            notes.append(f"Yelp is unavailable: {report.reason}")
+        elif report.attempted and report.not_refreshed:
+            notes.append(f"{len(report.not_refreshed)} sampled restaurants didn't come back from "
+                         "Yelp this time and are left out.")
         if not use_yelp:
-            notes.append(f"Yelp unavailable: {report.reason or 'no fresh Yelp data'}")
             pool = ds.build_pool(conn, use_yelp=False)
 
         reference = pool[pool["restaurant_id"].eq(reference_id)]
@@ -225,11 +231,12 @@ else:
                 elif addr:
                     st.caption(addr)
             st.write(rec["explanation"])
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Rating", show(rec["rating"]))
-            c2.metric("Reviews", show(rec["review_count"], "{:,}"))
-            c3.metric("Price", PRICE_LABELS.get(rec["price_level"], UNAVAILABLE))
-            c4.metric("Distance", show(rec["distance_km"], "{} km"))
+            st.markdown(
+                f"**Rating** {show(rec['rating'])} · "
+                f"**Reviews** {show(rec['review_count'], '{:,}')} · "
+                f"**Price** {PRICE_LABELS.get(rec['price_level'], UNAVAILABLE)} · "
+                f"**Distance** {show(rec['distance_km'], '{} km')}"
+            )
             shared = ", ".join(rec["shared_categories"]) or "none"
             fetched = fmt_time(rec["data_fetched_at"]) if run["use_yelp"] else UNAVAILABLE
             st.caption(f"Shared categories: {shared} · Yelp data fetched: {fetched}")

@@ -40,13 +40,14 @@ or `Copper Kitchen` to see branch selection.
    The importer accepts the NYC DOHMH column names (`CAMIS`, `DBA`, `ADDRESS`, `ZIPCODE`,
    `Latitude`, `Longitude`, `CUISINE_DESCRIPTION`) or our own (`nyc_id`, `name`, ...).
    Repeated inspection rows are collapsed; `0` coordinates are treated as missing.
-3. **Build the fixed Yelp sample once** (about 30 calls). This picks up to 20 restaurants
-   in each of 10 Manhattan areas, stores their Yelp IDs permanently, caches their Yelp
+3. **Build the fixed Yelp sample once** (about 15–30 calls). This picks up to 50 restaurants
+   in each of 10 Manhattan areas (500 total), stores their Yelp IDs permanently, caches their Yelp
    data for 24 hours, and maps them to NYC records by name + address (one-to-one only):
    ```bash
    python -m restaurant_alts.refresh build-sample
    ```
-   It refuses to run if a sample already exists, so the sample never changes silently.
+   It refuses to run if a sample already exists, so the sample never changes silently;
+   pass `--replace` to deliberately delete the old sample (and its cache) and build a new one.
 4. **Run the app:**
    ```bash
    streamlit run app.py
@@ -59,7 +60,7 @@ Yelp content may be kept for **at most 24 hours**, so nothing runs on a schedule
 - The app contacts Yelp **only when someone clicks _Find alternatives_**. Typing, choosing
   a match, changing filters and Streamlit reruns never call Yelp.
 - On a click, if the sample's Yelp data is missing or 24 hours old, the app reruns the
-  sample's searches (about 30 calls) and keeps only restaurants already in the sample.
+  sample's searches (about 15–30 calls) and keeps only restaurants already in the sample.
   Any that don't come back, or are now closed, are labelled **not refreshed** and left out;
   they are never replaced.
 - Clicks within 24 hours of the last refresh make **no** Yelp calls.
@@ -173,10 +174,14 @@ Planned manual evaluation: 20–30 real reference restaurants, compared with a b
 - Add `YELP_API_KEY` (and optionally `YELP_DAILY_CALL_LIMIT`) under the app's
   **Settings → Secrets**; see `.streamlit/secrets.toml.example`.
 - Streamlit Cloud has no reliable disk: the database starts empty after each restart, is
-  loaded from the committed `seed/` files (12,532 NYC restaurants, 200 sampled Yelp IDs,
-  125 mappings), and the Yelp cache is rebuilt on the next click.
-- To change the sample: delete `data/restaurants.sqlite`, import the directory, run
-  `build-sample`, then `python scripts/manage.py export-seed` and commit `seed/` via a PR.
+  loaded from the committed `seed/` files (12,532 NYC restaurants, 500 sampled Yelp IDs,
+  312 mappings), and the Yelp cache is rebuilt on the next click. When `seed/` changes in a
+  push, the app replaces its tables from the new seed and clears the Yelp cache on start.
+- Choose **Python 3.12** under Advanced settings when creating the app (the pinned packages
+  have no ready-made builds for newer Python versions). It can't be changed afterwards
+  without deleting and recreating the app.
+- To change the sample: `python -m restaurant_alts.refresh build-sample --replace`, then
+  `python scripts/manage.py export-seed`, and commit `seed/` via a PR.
 - If a key is ever committed, **rotate it immediately** in the Yelp developer portal.
 
 Never commit: `.env`, `.streamlit/secrets.toml`, `.venv/`, `__pycache__/`,
@@ -186,9 +191,9 @@ Never commit: `.env`, `.streamlit/secrets.toml`, `.venv/`, `__pycache__/`,
 
 - Similarity reflects category overlap only — not menu, atmosphere, quality, or how easy it
   is to get a table. Fewer reviews is a rough visibility signal, nothing more.
-- Alternatives come from the fixed Yelp sample (200 restaurants across 10 areas) when Yelp
+- Alternatives come from the fixed Yelp sample (500 restaurants across 10 areas) when Yelp
   is available; you can search for any of the 12,532 NYC restaurants as the reference. Search-area names are not verified neighbourhood boundaries.
-- 125 of the 200 sampled Yelp restaurants match an NYC record. The other 75 are still
+- 310 of the 500 sampled Yelp restaurants match an NYC record. The other 190 are still
   candidates while their Yelp data is fresh (shown with Yelp's name and address), but drop
   out in local-only mode.
 - The NYC file has no coordinates, so distance is only known from Yelp data; in

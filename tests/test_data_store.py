@@ -170,14 +170,45 @@ def test_yelp_id_mapped_to_another_restaurant_is_rejected(conn, nyc_csv):
     assert ds.load_mappings(conn).iloc[0].yelp_id == "yelp-fake-2"
 
 
-def test_seed_round_trip_only_into_empty_db(conn, nyc_csv, tmp_path):
+def _write_seed(conn, folder):
+    for table in ds.PERMANENT_TABLES:
+        ds.export_table_csv(conn, table, folder / f"{table}.csv")
+
+
+def test_seed_loads_into_empty_db_once(conn, nyc_csv, tmp_path):
     ds.import_directory_csv(conn, nyc_csv, source="synthetic")
     ds.add_mapping(conn, "1001", "yelp-fake-1", method="m", source="synthetic")
     ds.add_to_sample(conn, ["yelp-fake-1"], search_area="Test")
-    for table in ds.PERMANENT_TABLES:
-        ds.export_table_csv(conn, table, tmp_path / "seed" / f"{table}.csv")
+    _write_seed(conn, tmp_path / "seed")
     fresh = ds.connect(":memory:")
     loaded = ds.import_seed(fresh, tmp_path / "seed")
     assert loaded["directory"] == 3 and loaded["mappings"] == 1 and loaded["yelp_sample"] == 1
-    assert ds.import_seed(fresh, tmp_path / "seed") == {}  # not empty any more
+    assert ds.import_seed(fresh, tmp_path / "seed") == {}  # unchanged seed: no work
     assert ds.import_seed(ds.connect(":memory:"), tmp_path / "missing") == {}
+
+
+def test_changed_seed_replaces_old_sample_and_clears_cache(conn, nyc_csv, tmp_path):
+    ds.import_directory_csv(conn, nyc_csv, source="synthetic")
+    ds.add_to_sample(conn, ["old-1", "old-2"], search_area="Test")
+    _write_seed(conn, tmp_path / "seed")
+    deployed = ds.connect(":memory:")
+    ds.import_seed(deployed, tmp_path / "seed")
+    ds.upsert_cache(deployed, [{"yelp_id": "old-1"}], source="mock")
+    # New sample exported locally and pushed:
+    conn.execute("DELETE FROM yelp_sample"); conn.commit()
+    ds.add_to_sample(conn, ["new-1"], search_area="Test")
+    _write_seed(conn, tmp_path / "seed")
+    assert ds.import_seed(deployed, tmp_path / "seed")["yelp_sample"] == 1
+    assert list(ds.load_sample(deployed)["yelp_id"]) == ["new-1"]
+    assert ds.get_fresh_cache(deployed).empty
+
+
+def test_locked_or_synced_db_is_not_replaced(conn, nyc_csv, tmp_path):
+    ds.import_directory_csv(conn, nyc_csv, source="synthetic")
+    _write_seed(conn, tmp_path / "seed")
+    ds.mark_seed_synced(conn, tmp_path / "seed")
+    assert ds.import_seed(conn, tmp_path / "seed") == {}
+    demo = ds.connect(":memory:")
+    ds.lock_seed(demo)
+    assert ds.import_seed(demo, tmp_path / "seed") == {}
+    assert ds.load_directory(demo).empty
